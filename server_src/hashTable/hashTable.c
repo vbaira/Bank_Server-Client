@@ -1,0 +1,262 @@
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <pthread.h>
+#include <error.h>
+#include "bucketChain.h"
+
+
+#define perror2(s,e) fprintf(stdout,"%s : %s \n",s,strerror(e))
+#define HASHTABLE_SIZE 1024 //size of hash table
+
+
+
+/*
+Hash Table definition
+*/
+typedef struct HashTable{
+	struct BucketChain* Bucket[HASHTABLE_SIZE];
+	pthread_mutex_t Bucket_lock[HASHTABLE_SIZE];//array of mutexes,one mutex per bucket
+}HashTable;
+
+
+/*
+hash table creation
+*/
+HashTable* HashTable_Create(){
+	HashTable* new=malloc(sizeof(HashTable));
+	int iter=0;
+	int err;
+	/*recursive mutexes*/
+	pthread_mutexattr_t Attr;
+	pthread_mutexattr_init(&Attr);
+	pthread_mutexattr_settype(&Attr, PTHREAD_MUTEX_RECURSIVE);
+	/*initialize buckets and mutexes*/
+	for(iter=0; iter< HASHTABLE_SIZE ;iter++){
+		(new->Bucket[iter])=BucketChain_Alloc();
+		pthread_mutex_init(&(new->Bucket_lock[iter]),&Attr);
+	}
+	return new;	
+}
+
+
+/*
+destroy hash table
+*/
+void HashTable_Destroy(HashTable* ht){
+	int iter;
+	/*destroy buckets and mutexes*/
+	for(iter=0; iter< HASHTABLE_SIZE ;iter++){
+		BucketChain_Destroy(ht->Bucket[iter]);
+		pthread_mutex_destroy(&(ht->Bucket_lock[iter]));
+	}
+	free(ht);
+}
+
+
+/*
+djb2 Hash function
+source:http://www.cse.yorku.ca/~oz/hash.html
+*/
+int HashFunction(char *str){
+	unsigned long hash = 5381;
+    int c;
+    while (c = *str++){
+    	hash = ((hash << 5) + hash) + c; /* hash * 33 + c */
+	}	
+  	return (hash % HASHTABLE_SIZE);	
+}
+
+
+/*
+lock bucket <bucket>
+*/
+void HashTable_LockBucket(HashTable* ht,int bucket){
+	int err;
+	err=pthread_mutex_lock(&(ht->Bucket_lock[bucket]));
+	//perror2("lock:",err);
+}
+
+
+/*
+unlock bucket <bucket>
+*/
+void HashTable_UnlockBucket(HashTable* ht,int bucket){
+	int err;
+	err=pthread_mutex_unlock(&(ht->Bucket_lock[bucket]));
+	//perror2("unlock",err);
+}
+
+/*
+---BEFORE:LOCK----
+add_account
+returns -1 if account already exists or init_amount < 0
+return 0 if account successfully added
+----AFTER:UNLOCK----
+*/
+int HashTable_AddAccount(HashTable* ht,char* acc_name,int init_amount){
+	if (init_amount < 0){
+		printf("failure:initial balance is < 0\n\n");
+		return -1;
+	}
+	int bucket=HashFunction(acc_name);
+	int status=BucketChain_Add((ht->Bucket[bucket]),acc_name,init_amount);
+	if (status<0){//failure,account already exists
+		printf("failure:account %s already exists\n\n",acc_name);
+		return -1;
+	}
+	else{//success,account added
+		printf("success:account %s added\n\n",acc_name);
+		return 0;
+	}
+}
+
+
+/*
+search if account exists(NOT USED)
+*/
+int HashTable_Search(HashTable* ht,char* name){
+	int bucket=HashFunction(name);
+	struct BucketChainNode* account=BucketChain_Search(ht->Bucket[bucket],name);
+	if(account == NULL){//account doesnt exist
+		return -1;
+	}
+	else return 0;//account exists
+}
+
+/*
+---BEFORE:LOCK----
+add_transfer
+transfer amount from source to dest
+return -1 for failure
+return 0 for success
+----AFTER:UNLOCK----
+*/
+int HashTable_AddTransfer(HashTable* ht,char* src,char* dest,int amount){
+	if (amount <= 0){
+		printf("failure:transfer %s->%s,amount is <=0\n\n",src,dest);
+		return -1;
+	}
+	/*check if src and dest accounts exists*/
+	int src_bucket=HashFunction(src);
+	int dest_bucket=HashFunction(dest);
+	struct BucketChainNode* src_account=BucketChain_Search(ht->Bucket[src_bucket],src);
+	struct BucketChainNode* dest_account=BucketChain_Search(ht->Bucket[dest_bucket],dest);
+	if((src_account == NULL) || (dest_account == NULL)){//if one account doesnt exist
+		printf("failure:transfer %s->%s,account doesnt exist\n\n",src,dest);
+		return -1;
+	}
+	/*check if src account has enough money for the transfer*/
+	if( (BucketChain_GetBalance(src_account) < amount) ){
+		printf("failure:transfer %s->%s,source account doesnt have enough money\n\n",src,dest);
+		return -1;
+	}
+	/*do the transfer*/
+	BucketChain_AddTransfer(src_account,dest_account,amount);
+	printf("success:transfer %s->%s completed successfully\n\n",src,dest);
+	return 0;
+}
+
+
+/*
+---BEFORE:DEST ARRAY ALLOC,LOCK----
+add_multi_transfer 
+transfer amount from source to all destinations
+return -1 for failure
+return 0 for success
+----AFTER:DEST ARRAY DEALLOC,UNLOCK----
+*/
+int HashTable_AddMultiTransfer(HashTable* ht,char* src,char** dest,int numOfDest,int amount){
+	if (amount <= 0){
+		printf("failure:multi transfer from %s,amount is <=0\n\n",src);
+		return -1;
+	}
+	/*check if src account exists*/
+	int src_bucket=HashFunction(src);
+	struct BucketChainNode* src_account=BucketChain_Search(ht->Bucket[src_bucket],src);
+	if(src_account == NULL){//if source account doesnt exist
+		printf("failure: multi transfer from %s, source account doesnt exist\n\n",src);
+		return -1;
+	}
+	/*check if dest accounts exists*/
+	int dest_bucket;
+	struct BucketChainNode* dest_account=NULL;
+	int iter;
+	for (iter=0; iter<numOfDest; iter++){
+		dest_bucket=HashFunction(dest[iter]);
+		dest_account=BucketChain_Search(ht->Bucket[dest_bucket],dest[iter]);
+		if(dest_account == NULL){//if dest account doesnt exist
+			printf("failure: multi transfer to %s, destination account doesnt exist\n\n",dest[iter]);
+			return -1;
+		}
+	}
+	/*check if src account has enough money for the transfer*/
+	if( BucketChain_GetBalance(src_account) < (numOfDest * amount) ){
+		printf("failure:multi transfer from %s, source account doesnt have enough money\n\n",src);
+		return -1;
+	}
+	/*do the transfer*/
+	dest_account=NULL;
+	for (iter=0; iter<numOfDest; iter++){
+		dest_bucket=HashFunction(dest[iter]);
+		dest_account=BucketChain_Search(ht->Bucket[dest_bucket],dest[iter]);
+		BucketChain_AddTransfer(src_account,dest_account,amount);
+	}
+	printf("success: multi transfer from %s completed successfully\n\n",src);
+	return 0;	
+}
+
+
+/*
+---BEFORE:LOCK----
+print_balance
+return balance of account
+return -1 for failure
+----AFTER:UNLOCK----
+*/
+int HashTable_PrintBalance(HashTable* ht,char* account_name){
+	int bucket=HashFunction(account_name);
+	struct BucketChainNode* account=BucketChain_Search(ht->Bucket[bucket],account_name);
+	if( account == NULL ){//if account doesnt exist
+		printf("failure:print balance %s,account doesnt exist\n\n",account_name);
+		return -1;
+	}
+	else{//account exists
+		printf("success:print balance completed successfully\n\n");
+		return BucketChain_GetBalance(account);
+	}
+}
+
+
+/*
+---BEFORE:ACCOUNTS/BALANCE ARRAY ALLOC,LOCK----
+print_multi_balance 
+return balance of accounts in account_name array
+return -1 for failure
+return 0 for success
+----AFTER:ACCOUNTS/BALANCE ARRAY DEALLOC,UNLOCK----
+*/
+int HashTable_PrintMultiBalance(HashTable* ht,char** account_name,int* balance,int numOfAccounts){
+	/*check if accounts exist*/
+	int bucket;
+	struct BucketChainNode* account=NULL;
+	int iter;
+	for (iter=0; iter<numOfAccounts; iter++){
+		bucket=HashFunction(account_name[iter]);
+		account=BucketChain_Search(ht->Bucket[bucket],account_name[iter]);
+		if(account == NULL){//if account doesnt exist
+			printf("failure: print multi balance , account %s doesnt exist\n\n",account_name[iter]);
+			return -1;
+		}
+	}
+	/*fill the ballance array  with the  acoount balances*/
+	account=NULL;
+	for (iter=0; iter<numOfAccounts; iter++){
+		bucket=HashFunction(account_name[iter]);
+		account=BucketChain_Search(ht->Bucket[bucket],account_name[iter]);
+		balance[iter]=BucketChain_GetBalance(account);
+	}
+	printf("success:print multi balance completed successfully\n\n");
+	return 0;
+}
+

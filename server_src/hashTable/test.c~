@@ -1,0 +1,79 @@
+#include "hashTable.h"
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <pthread.h>
+
+#define perror2(s,e) fprintf(stdout,"%s : %s \n",s,strerror(e))
+
+struct HashTable* ht;//global
+
+void *thread_f1(void* arg){
+printf("thread 1 entering\n");
+HashTable_LockBucket(ht,0);
+
+HashTable_UnlockBucket(ht,0);
+printf("thread 1 exiting\n");
+}
+
+void *thread_f2(void* arg){
+printf("thread 2 entering\n");
+HashTable_LockBucket(ht,0);
+sleep(10);
+HashTable_UnlockBucket(ht,0);
+printf("thread 2 exiting\n");
+}
+
+int main(){
+ht=HashTable_Create();
+/*
+pthread_t thr1,thr2 ;
+int err1,err2;
+err1=pthread_create(&thr1,NULL,thread_f1,NULL);
+perror2("create",err1);
+err2=pthread_create(&thr2,NULL,thread_f2,NULL);
+perror2("create",err2);
+*/
+HashTable_AddAccount(ht,"vasilis bairamidis",500);
+HashTable_AddAccount(ht,"nikos takis",600);
+HashTable_AddAccount(ht,"giorgos nikou",800);
+HashTable_AddAccount(ht,"nikonas stamatiou",200);
+
+
+HashTable_AddTransfer(ht,"vasilis bairamidis","nikos takis",600);
+char* arr3[]={"nikonas stamatiou","nikos takis","giorgos nikou"};
+HashTable_AddMultiTransfer(ht,"vasilis bairamidis",arr3,3,110);
+int b=HashTable_PrintBalance(ht,"vasilis bairamidis");
+printf("%d\n",b);
+b=HashTable_PrintBalance(ht,"nikosg takis");
+printf("%d\n",b);
+
+char* arr[]={"vasilis bairamidis","nikos takiss","giorgos nikou"};
+int bal[3];
+HashTable_PrintMultiBalance(ht,arr,bal,3);
+char* arr2[]={"vasilis bairamidis","nikos takis","giorgos nikou","nikonas stamatiou"};
+HashTable_PrintMultiBalance(ht,arr2,bal,4);
+
+
+
+
+printf("%d|%d|%d|%d \n",bal[0],bal[1],bal[2],bal[3]);
+
+//HashTable_Destroy(ht);
+
+
+
+
+getchar();
+}
+
+
+
+/*
+int HashTable_AddTransfer(struct HashTable* ht,char* src,char* dest,int amount);//
+int HashTable_AddMultiTransfer(struct HashTable* ht,char* src,char ** dest,int numOfDest,int amount);//
+int HashTable_PrintBalance(struct HashTable* ht,char* account);//
+int HashTable_PrintMultiBalance(struct HashTable* ht,char** account_name,int** balance,int numOfAccounts);//
+HashTable_LockBucket(struct HashTable* ht,int bucket);//
+HashTable_UnlockBucket(struct HashTable* ht,int bucket);//
+*/

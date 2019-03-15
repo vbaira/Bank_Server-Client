@@ -1,0 +1,170 @@
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
+#include <netdb.h>
+
+#define BUFFER_SIZE 2048
+
+
+void input_check(int argc,char* argv[],char* server_host,char* command_file,int* port);
+void get_requests(FILE* input,int sock);
+
+
+/*socket related code is taken from
+class' presentation material*/
+int main(int argc,char* argv[]){
+	/*command line input check*/
+	char server_host[256];
+	char command_file[256];
+	int port=-1;
+	memset(server_host,'\0',256);
+	memset(command_file,'\0',256);
+	input_check(argc,argv,server_host,command_file,&port);
+	//printf("server:%s|port:%d|file:%s\n",server_host,port,command_file);//
+	/****Connection with server****/
+	struct sockaddr_in server ;
+	struct sockaddr* serverptr=(struct sockaddr*)&server ;
+	struct hostent* rem;
+	/*create socket*/
+	int sock;
+	if( (sock=socket(AF_INET,SOCK_STREAM,0)) < 0){
+		perror("error creating socket");
+		exit(EXIT_FAILURE);
+	}
+	/*get server address*/
+	if( (rem=gethostbyname(server_host)) ==NULL ){
+		herror("error on gethostbyname"); 
+		exit(EXIT_FAILURE);
+	}
+	server.sin_family=AF_INET; 
+	memcpy(&server.sin_addr,rem->h_addr,rem->h_length);
+	server.sin_port=htons(port);
+	/*initiate connection*/
+	if ( connect(sock,serverptr,sizeof(server)) < 0){
+		perror("error on connect");
+		exit(EXIT_FAILURE);
+	}
+	printf ("Successful Connection to %s port %d\n",server_host,port);
+	/*send requests from input file*/
+	FILE* req=fopen(command_file,"r");
+	if(req!=NULL){
+		get_requests(req,sock);
+		fclose(req);
+	}
+	else{
+		perror("Error opening file");
+	}
+	/*send requests from stdin*/
+	printf("Enter requests manually\n");
+	get_requests(stdin,sock);
+}
+
+
+/*
+send requests to server and print response
+*/
+void get_requests(FILE* input,int sock){
+	char input_buf[BUFFER_SIZE];
+	char test_buf[BUFFER_SIZE];
+	char* token;
+	char* delimiters=" \n";
+	int sleep_time;
+	int sleep_flag=0;
+	while(fgets(input_buf,sizeof(input_buf),input)!=NULL){
+		strcpy(test_buf,input_buf);//strtok mutates the sting.create a duplicate to call strtok on it
+		token=strtok(test_buf,delimiters);
+		if(token==NULL) continue; //ignore empty lines
+		/*if request is sleep or exit manage it on client*/
+		/*if not sent it to server*/
+		if (strcmp(token,"exit")==0){
+			close(sock);//close socket
+			fclose(input);//close input stream
+			exit(EXIT_SUCCESS);//exit application
+		}
+		else if (strcmp(token,"sleep")==0){
+			token=strtok(NULL,delimiters);
+			if(token==NULL) continue;
+			if (sleep_flag==1){//for consecutive sleeps accumulate sleep time
+				sleep_time+=1000*(atoi(token));//add sleep time
+			}
+			else{
+				sleep_flag=1;
+				sleep_time=1000*(atoi(token));
+			}
+		}
+		else{
+			/*if previous request(s) was sleep,flag is set to 1.
+			sleep for <sleep_time> ms to delay the broadcast of 
+			the request to server*/
+			if (sleep_flag==1){
+				usleep(sleep_time);
+				sleep_flag=0;//unset the flag
+				sleep_time=0;//reset sleep time
+			}
+			/*sent request to server*/
+			int size=strlen(input_buf)+1;
+			if ( (write(sock,&size,sizeof(int))) == -1){
+				perror ("Error in Writing");
+				continue; 
+			}
+			int bytes_left=size;
+			int offset=0;
+			while (bytes_left > 0){
+				bytes_left=bytes_left-write(sock,input_buf+offset,bytes_left);
+				offset=size-bytes_left;
+			}
+			/*get response*/
+			char response_buf[BUFFER_SIZE];
+			read(sock,&size,sizeof(int));
+			bytes_left=size;
+			offset=0;
+			while (bytes_left > 0){
+				bytes_left=bytes_left-read(sock,response_buf+offset,bytes_left);
+				offset=size-bytes_left;
+			}
+			/*print response*/
+			printf("%s\n",response_buf);			
+		}
+	}
+}
+
+
+
+
+/*
+check command line input and set server_host,command_file and port if everything is OK.
+if an error occurs  print a message and exit proccess
+*/
+void input_check(int argc,char* argv[],char* server_host,char* command_file,int* port){
+	/******Input check*******/
+	if (argc != 7){
+		printf("failure: application call should be something like:\n"
+		"\t$ ./bankclient -h <server host> -p <server port> -i <command file>\n");
+		exit(EXIT_FAILURE);
+	}	
+	/*analyze flags*/
+	int iter;
+	for (iter=0; iter<3; iter++){
+		if( strcmp(argv[(2*iter)+1],"-h")==0 ) strcpy(server_host,argv[(2*iter)+2]);
+		else if ( strcmp(argv[(2*iter)+1],"-p")==0 ) (*port)=atoi(argv[(2*iter)+2]);
+		else if ( strcmp(argv[(2*iter)+1],"-i")==0 ) strcpy(command_file,argv[(2*iter)+2]);
+		else{
+			printf("failure:invalid flag\n");
+			exit(EXIT_FAILURE);
+		}
+	}
+	/*if one  variable was not set(one flag was used more than once)*/
+	if ( (server_host[0]=='\0') || (command_file[0]=='\0') || (*port==-1) ){
+		printf("failure: use each flag only once\n");
+		exit(EXIT_FAILURE);
+	}
+	/*check if port is valid*/
+	if ( (*port)<=0 ){
+		printf("failure:not a valid port\n");
+		exit(EXIT_FAILURE);
+	}	
+}

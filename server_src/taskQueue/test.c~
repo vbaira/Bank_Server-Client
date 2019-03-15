@@ -1,0 +1,35 @@
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <pthread.h>
+#include <error.h>
+#include "taskQueue.h"
+
+
+int main(){
+	struct TaskQueue* tq;
+	tq=TaskQueue_Alloc(5);
+	TaskQueue_Push(tq,10);
+	TaskQueue_Push(tq,11);
+	TaskQueue_Push(tq,12);
+	TaskQueue_Push(tq,13);
+	if (TaskQueue_IsFull(tq) >= 0) printf("0full\n");
+	TaskQueue_Push(tq,14);
+	if (TaskQueue_IsFull(tq) >= 0) printf("full\n");
+
+
+	printf("%d\n",TaskQueue_Pop(tq));
+	printf("%d\n",TaskQueue_Pop(tq));
+	printf("%d\n",TaskQueue_Pop(tq));
+	if (TaskQueue_IsEmpty(tq) >= 0) printf("0empty\n");
+	printf("%d\n",TaskQueue_Pop(tq));
+	printf("%d\n",TaskQueue_Pop(tq));
+	if (TaskQueue_IsEmpty(tq) >= 0) printf("empty\n");
+
+	TaskQueue_Destroy(tq);
+
+
+
+
+
+}
